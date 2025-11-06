@@ -1,9 +1,21 @@
-#include "telemetry.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
+
+#include "crypto.h"
+#include <vector>
+#include <string>
+#include <fstream>
+
+// Helper to read a file into a string
+static bool read_file_into_string(const std::string& path, std::string& out) {
+    std::ifstream fs(path);
+    if (!fs) return false;
+    out.assign((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+    return true;
+}
 
 /* Helpers: write big-endian integers into a buffer (deterministic, bounded) */
 static inline void write_u16_be(uint8_t *buf, uint16_t v) {
@@ -82,6 +94,39 @@ int main(void)
     uint32_t uptime_s = 12345U;
     /* Example sensor value in Q16 fixed point (1.234 -> 1.234 * 2^16) */
     int32_t sensor1_q16 = (int32_t)(1.234f * 65536.0f);
+
+#ifdef ENABLE_PACKET_ENCRYPTION
+    // Initialize crypto subsystem and load keys
+    (void)printf("Initializing crypto subsystem...\n");
+    status = crypto_initialize();
+    if (status != STATUS_SUCCESS) {
+        (void)fprintf(stderr, "Crypto initialization failed: %d\n", status);
+        return 1;
+    }
+
+    std::string local_key_pem, peer_key_pem;
+    if (!read_file_into_string("local_private.pem", local_key_pem)) {
+        (void)fprintf(stderr, "Failed to read local_private.pem\n");
+        return 1;
+    }
+    if (!read_file_into_string("peer_public.pem", peer_key_pem)) {
+        (void)fprintf(stderr, "Failed to read peer_public.pem\n");
+        return 1;
+    }
+
+    status = crypto_set_local_private_key_pem(local_key_pem.c_str(), local_key_pem.length());
+    if (status != STATUS_SUCCESS) {
+        (void)fprintf(stderr, "Failed to load local private key: %d\n", status);
+        return 1;
+    }
+
+    status = crypto_set_peer_public_key_pem(peer_key_pem.c_str(), peer_key_pem.length());
+    if (status != STATUS_SUCCESS) {
+        (void)fprintf(stderr, "Failed to load peer public key: %d\n", status);
+        return 1;
+    }
+    (void)printf("Crypto keys loaded successfully.\n");
+#endif
     
     /* Initialize radio subsystem */
     status = radio_initialize();
@@ -113,28 +158,34 @@ int main(void)
         return 1;
     }
 
-    /* Create and queue telemetry packet using the library API (it will compute CRC) */
     status = telemetry_create_packet(&packet, payload, payload_len, 1000U);
     if (status != STATUS_SUCCESS) {
         (void)fprintf(stderr, "Failed to create packet: %d\n", status);
         return 1;
     }
 
+#ifdef ENABLE_PACKET_ENCRYPTION
+    (void)printf("Encrypting packet...\n");
+    uint8_t encrypted_buf[512];
+    uint16_t encrypted_len = 0;
+    status = crypto_encrypt_packet(&packet, encrypted_buf, &encrypted_len);
+    if (status != STATUS_SUCCESS) {
+        (void)fprintf(stderr, "Failed to encrypt packet: %d\n", status);
+        return 1;
+    }
+    (void)printf("Transmitting encrypted packet (%u bytes)...\n", (unsigned)encrypted_len);
+    status = radio_transmit_raw_buffer(encrypted_buf, encrypted_len);
+#else
     status = telemetry_queue_packet(&packet);
     if (status != STATUS_SUCCESS) {
         (void)fprintf(stderr, "Failed to queue packet: %d\n", status);
         return 1;
     }
-
-    (void)printf("Telemetry packet queued (payload %u bytes)\n", (unsigned)payload_len);
-    
-    /* Transmit queued packets (downlink). This will switch the radio to
-     * uplink/RECEIVING state when complete according to
-     * radio_transmit_queued_packets().
-     */
     status = radio_transmit_queued_packets();
+#endif
+
     if (status != STATUS_SUCCESS) {
-        (void)fprintf(stderr, "Failed to transmit packets: %d\n", status);
+        (void)fprintf(stderr, "Failed to transmit packet(s): %d\n", status);
         return 1;
     }
 
@@ -145,6 +196,8 @@ int main(void)
      * a downlink send.
      */
     {
+        // This part of the simulation is simplified and does not include decryption
+        // of a response, but focuses on the initial encrypted send.
         uint8_t uplink_payload[] = { 0xAA, 0xBB, 0xCC };
         uint16_t uplink_len = (uint16_t)sizeof(uplink_payload);
         uint32_t reply_timestamp = 2000U;
