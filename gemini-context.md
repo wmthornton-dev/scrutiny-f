@@ -55,6 +55,13 @@ g++ -std=c++11 -DENABLE_PACKET_ENCRYPTION Tests/crypto_tests.cpp src/telemetry.c
 ./bin/crypto_tests
 ```
 
+To build and run the encrypted receive test:
+
+```bash
+g++ -std=c++11 -I. -DENABLE_PACKET_ENCRYPTION Tests/encrypted_receive_test.cpp src/crypto.cpp src/telemetry.cpp -o bin/encrypted_receive_test -lcrypto -lssl
+./bin/encrypted_receive_test
+```
+
 ## AI Agent Editing Guidelines
 
 - **Preserve Determinism**: Do not introduce unbounded loops or dynamic memory allocation.

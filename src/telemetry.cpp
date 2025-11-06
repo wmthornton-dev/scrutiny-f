@@ -288,6 +288,7 @@ SystemStatus radio_transmit_queued_packets(void)
     return status;
 }
 
+// Transmit encrypted raw buffer
 SystemStatus radio_transmit_raw_buffer(const uint8_t* data, uint16_t len)
 {
     SystemStatus status;
