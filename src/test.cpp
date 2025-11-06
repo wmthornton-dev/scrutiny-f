@@ -8,6 +8,8 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <chrono>
+#include <thread>
 
 // Helper to read a file into a string
 static bool read_file_into_string(const std::string& path, std::string& out) {
@@ -138,7 +140,12 @@ int main(void)
     (void)printf("Radio subsystem initialized successfully\n");
     
     /* Set radio to standby state */
-    status = radio_set_state(RADIO_STATE_STANDBY);
+    status = radio_set_state(ANTENNA_UPLINK, RADIO_STATE_STANDBY);
+    if (status != STATUS_SUCCESS) {
+        (void)fprintf(stderr, "Failed to set radio state: %d\n", status);
+        return 1;
+    }
+    status = radio_set_state(ANTENNA_DOWNLINK, RADIO_STATE_STANDBY);
     if (status != STATUS_SUCCESS) {
         (void)fprintf(stderr, "Failed to set radio state: %d\n", status);
         return 1;
@@ -174,14 +181,9 @@ int main(void)
         return 1;
     }
     (void)printf("Transmitting encrypted packet (%u bytes)...\n", (unsigned)encrypted_len);
-    status = radio_transmit_raw_buffer(encrypted_buf, encrypted_len);
+    status = radio_transmit_raw_buffer(ANTENNA_DOWNLINK, encrypted_buf, encrypted_len);
 #else
-    status = telemetry_queue_packet(&packet);
-    if (status != STATUS_SUCCESS) {
-        (void)fprintf(stderr, "Failed to queue packet: %d\n", status);
-        return 1;
-    }
-    status = radio_transmit_queued_packets();
+    status = telemetry_queue_packet(ANTENNA_DOWNLINK, &packet);
 #endif
 
     if (status != STATUS_SUCCESS) {
@@ -189,37 +191,31 @@ int main(void)
         return 1;
     }
 
-    /* At this point, radio is in RECEIVING state on the uplink frequency.
-     * Simulate an uplink reception via the HAL weak hook. The default
-     * implementation of telemetry_hal_on_receive() calls
-     * radio_receive_and_respond(), which will queue a reply and trigger
-     * a downlink send.
-     */
     {
-        // This part of the simulation is simplified and does not include decryption
-        // of a response, but focuses on the initial encrypted send.
         uint8_t uplink_payload[] = { 0xAA, 0xBB, 0xCC };
         uint16_t uplink_len = (uint16_t)sizeof(uplink_payload);
         uint32_t reply_timestamp = 2000U;
 
-        /* Signal the HAL receive hook; in production, the HAL would call this
-         * when data arrives from the modem. The header provides a weak default
-         * that uses radio_receive_and_respond().
-         */
         telemetry_hal_on_receive(uplink_payload, uplink_len, reply_timestamp);
     }
+
+    // Allow time for async transmission
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
     /* Get and display radio status */
-    status = radio_get_status(&radio_status);
-    if (status == STATUS_SUCCESS) {
-        (void)printf("\nRadio Status:\n");
-    (void)printf("  State: %d\n", radio_status.current_state);
-    uint32_t khz = radio_get_frequency_khz();
-    (void)printf("  Frequency: %u.%03u MHz\n", khz / 1000U, khz % 1000U);
-        (void)printf("  Power: %d dBm\n", radio_status.config.transmit_power_dbm);
-        (void)printf("  Packets TX: %u\n", radio_status.packets_transmitted);
-        (void)printf("  Packets RX: %u\n", radio_status.packets_received);
-        (void)printf("  Errors: %u\n", radio_status.error_count);
+    for (int i = 0; i < NUM_ANTENNAS; ++i) {
+        Antenna antenna = static_cast<Antenna>(i);
+        status = radio_get_status(antenna, &radio_status);
+        if (status == STATUS_SUCCESS) {
+            (void)printf("\nRadio Status (Antenna %d):\n", i);
+            (void)printf("  State: %d\n", radio_status.current_state);
+            uint32_t khz = radio_get_frequency_khz(antenna);
+            (void)printf("  Frequency: %u.%03u MHz\n", khz / 1000U, khz % 1000U);
+            (void)printf("  Power: %d dBm\n", radio_status.config.transmit_power_dbm);
+            (void)printf("  Packets TX: %u\n", radio_status.packets_transmitted);
+            (void)printf("  Packets RX: %u\n", radio_status.packets_received);
+            (void)printf("  Errors: %u\n", radio_status.error_count);
+        }
     }
     
     /* Shutdown radio subsystem */

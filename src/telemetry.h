@@ -5,6 +5,8 @@
 #include <cstring>
 #include <cstdio>
 #include <cstddef>
+#include <thread>
+#include <mutex>
 
 /* Power of 2 Rule: All loop bounds shall be statically determinable */
 #define MAX_TELEMETRY_BUFFER_SIZE 256U
@@ -43,6 +45,13 @@ typedef enum {
     RADIO_STATE_ERROR = 4
 } RadioState;
 
+/* Antenna selection */
+typedef enum {
+    ANTENNA_UPLINK = 0,
+    ANTENNA_DOWNLINK = 1,
+    NUM_ANTENNAS
+} Antenna;
+
 /* Telemetry packet structure - fixed size for predictability */
 typedef struct {
     uint32_t timestamp;
@@ -77,23 +86,24 @@ typedef struct {
 
 // Function declarations
 SystemStatus radio_initialize(void);
-SystemStatus radio_set_configuration(const RadioConfig* config);
-SystemStatus radio_set_state(RadioState new_state);
-SystemStatus radio_set_downlink(void);
-SystemStatus radio_set_uplink(void);
-uint32_t radio_get_frequency_khz(void);
+SystemStatus radio_set_configuration(Antenna antenna, const RadioConfig* config);
+SystemStatus radio_set_state(Antenna antenna, RadioState new_state);
+uint32_t radio_get_frequency_khz(Antenna antenna);
 SystemStatus telemetry_create_packet(TelemetryPacket* packet,
                                      const uint8_t* data,
                                      uint16_t data_length,
                                      uint32_t timestamp);
-SystemStatus telemetry_queue_packet(const TelemetryPacket* packet);
-SystemStatus radio_transmit_queued_packets(void);
-SystemStatus radio_transmit_raw_buffer(const uint8_t* data, uint16_t len);
+SystemStatus telemetry_queue_packet(Antenna antenna, const TelemetryPacket* packet);
+SystemStatus radio_transmit_queued_packets(Antenna antenna);
+SystemStatus radio_transmit_raw_buffer(Antenna antenna, const uint8_t* data, uint16_t len);
 SystemStatus radio_receive_and_respond(const uint8_t* reply_data,
                                       uint16_t reply_len,
                                       uint32_t timestamp);
 __attribute__((weak)) void telemetry_hal_on_receive(const uint8_t* data, uint16_t len, uint32_t timestamp);
-SystemStatus radio_get_status(RadioControl* control);
+SystemStatus radio_get_status(Antenna antenna, RadioControl* control);
 SystemStatus radio_shutdown(void);
+void radio_increment_packets_received(Antenna antenna);
+void radio_increment_packets_transmitted(Antenna antenna);
+void radio_increment_error_count(Antenna antenna);
 
 #endif // TELEMETRY_H
